@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#05060f" />
+<title>Space Shooter Ultimate</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icon-192.png" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #000;
+    overflow: hidden;
+    height: 100%;
+    width: 100%;
+    touch-action: none;
+    overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  canvas {
+    display: block;
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script>
+(function () {
+  "use strict";
+
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  let DPR = Math.max(1, window.devicePixelRatio || 1);
+  let WIDTH, HEIGHT;
+
+  function resizeCanvas() {
+    WIDTH = window.innerWidth;
+    HEIGHT = window.innerHeight;
+    canvas.width = WIDTH * DPR;
+    canvas.height = HEIGHT * DPR;
+    canvas.style.width = WIDTH + "px";
+    canvas.style.height = HEIGHT + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+
+  WIDTH = window.innerWidth;
+  HEIGHT = window.innerHeight;
+
+  // ---------------------------------
+  // Load images
+  // ---------------------------------
+  const images = {};
+  const sources = {
+    background: "space.jpg",
+    player: "player.png",
+    enemy: "enemy.png",
+    boss: "boss.png"
+  };
+  let loadedCount = 0;
+  const totalImages = Object.keys(sources).length;
+
+  function loadImages(callback) {
+    Object.keys(sources).forEach((key) => {
+      const img = new Image();
+      img.onload = () => {
+        loadedCount++;
+        if (loadedCount === totalImages) callback();
+      };
+      img.onerror = () => {
+        loadedCount++;
+        if (loadedCount === totalImages) callback();
+      };
+      img.src = sources[key];
+      images[key] = img;
+    });
+  }
+
+  // ---------------------------------
+  // Colors
+  // ---------------------------------
+  const WHITE = "#ffffff";
+  const RED = "#ff0000";
+  const GREEN = "#00ff00";
+  const YELLOW = "#ffff00";
+  const BLACK = "#000000";
+
+  // ---------------------------------
+  // Game state
+  // ---------------------------------
+  let playerSize, enemySize, bossSize;
+  let playerW, playerH, playerX, playerY;
+  let bulletW, bulletH, bulletSpeed;
+  let enemyW, enemyH, enemySpeed;
+  let bossX, bossY, bossSpeed, bossHealth, bossActive, bossDefeated, bossBulletSpeed;
+  let bullets = [];
+  let enemies = [];
+  let bossBullets = [];
+  let lastShot = 0;
+  let lastBossShot = 0;
+  let score = 0;
+  let highScore = 0;
+  let playerLives = 10;
+  const maxHealth = 10;
+  let gameOver = false;
+  let retryButton = { x: 0, y: 0, w: 340, h: 100 };
+  let fontSize, bigFontSize;
+
+  try {
+    highScore = parseInt(localStorage.getItem("spaceShooterHighScore") || "0", 10) || 0;
+  } catch (e) {
+    highScore = 0;
+  }
+
+  function saveHighScore() {
+    if (score > highScore) {
+      highScore = score;
+      try {
+        localStorage.setItem("spaceShooterHighScore", String(highScore));
+      } catch (e) {}
+    }
+  }
+
+  function computeSizes() {
+    playerSize = Math.floor(WIDTH / 8);
+    enemySize = Math.floor(WIDTH / 9);
+    bossSize = Math.floor(WIDTH / 3);
+
+    playerW = playerSize;
+    playerH = playerSize;
+
+    bulletW = Math.max(3, Math.floor(WIDTH / 70));
+    bulletH = Math.max(6, Math.floor(HEIGHT / 35));
+    bulletSpeed = Math.max(4, Math.floor(HEIGHT / 45));
+
+    enemyW = enemySize;
+    enemyH = enemySize;
+    enemySpeed = Math.max(1, HEIGHT / 350);
+
+    bossSpeed = Math.max(1, HEIGHT / 250);
+    bossBulletSpeed = Math.max(2, Math.floor(HEIGHT / 80));
+
+    fontSize = Math.max(16, Math.floor(WIDTH / 20));
+    bigFontSize = Math.max(32, Math.floor(WIDTH / 10));
+
+    retryButton = {
+      x: WIDTH / 2 - 170,
+      y: HEIGHT / 2 + 100,
+      w: 340,
+      h: 100
+    };
+  }
+
+  function spawnEnemy() {
+    const x = Math.random() * (WIDTH - enemyW);
+    const y = -500 + Math.random() * 400; // between -500 and -100
+    enemies.push({ x: x, y: y, health: 3 });
+  }
+
+  function resetGame() {
+    bullets = [];
+    enemies = [];
+    bossBullets = [];
+
+    playerX = WIDTH / 2 - playerW / 2;
+    playerY = HEIGHT - playerH - Math.min(180, HEIGHT * 0.22);
+
+    playerLives = 10;
+    score = 0;
+
+    bossActive = false;
+    bossHealth = 100;
+    bossY = -bossSize;
+    bossX = WIDTH / 2 - bossSize / 2;
+    bossDefeated = false;
+
+    for (let i = 0; i < 4; i++) spawnEnemy();
+  }
+
+  function initGame() {
+    computeSizes();
+    playerX = WIDTH / 2 - playerW / 2;
+    playerY = HEIGHT - playerH - Math.min(180, HEIGHT * 0.22);
+
+    bossX = WIDTH / 2 - bossSize / 2;
+    bossY = -bossSize;
+    bossHealth = 100;
+    bossActive = false;
+    bossDefeated = false;
+
+    for (let i = 0; i < 3; i++) spawnEnemy();
+  }
+
+  // ---------------------------------
+  // Input: drag to move player
+  // ---------------------------------
+  function movePlayerTo(clientX) {
+    playerX = clientX - playerW / 2;
+    if (playerX < 0) playerX = 0;
+    if (playerX > WIDTH - playerW) playerX = WIDTH - playerW;
+  }
+
+  function handlePointerDown(x, y) {
+    if (gameOver) {
+      if (
+        x >= retryButton.x &&
+        x <= retryButton.x + retryButton.w &&
+        y >= retryButton.y &&
+        y <= retryButton.y + retryButton.h
+      ) {
+        resetGame();
+        gameOver = false;
+      }
+    }
+    movePlayerTo(x);
+  }
+
+  canvas.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    const t = e.touches[0];
+    handlePointerDown(t.clientX, t.clientY);
+  }, { passive: false });
+
+  canvas.addEventListener("touchmove", (e) => {
+    e.preventDefault();
+    const t = e.touches[0];
+    movePlayerTo(t.clientX);
+  }, { passive: false });
+
+  canvas.addEventListener("mousedown", (e) => {
+    handlePointerDown(e.clientX, e.clientY);
+  });
+
+  canvas.addEventListener("mousemove", (e) => {
+    if (e.buttons === 1) movePlayerTo(e.clientX);
+  });
+
+  window.addEventListener("resize", () => {
+    resizeCanvas();
+  });
+
+  // ---------------------------------
+  // Draw helpers
+  // ---------------------------------
+  function drawText(text, size, color, x, y) {
+    ctx.fillStyle = color;
+    ctx.font = size + "px Arial, sans-serif";
+    ctx.textBaseline = "top";
+    ctx.fillText(text, x, y);
+  }
+
+  function rectsCollide(ax, ay, aw, ah, bx, by, bw, bh) {
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+
+  // ---------------------------------
+  // Main loop
+  // ---------------------------------
+  function update(now) {
+    if (!gameOver) {
+      // Auto fire
+      if (now - lastShot > 150) {
+        bullets.push({ x: playerX + playerW / 2, y: playerY });
+        lastShot = now;
+      }
+    }
+
+    // Update bullets
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      bullets[i].y -= bulletSpeed;
+      if (bullets[i].y < -50) bullets.splice(i, 1);
+    }
+
+    // Enemy logic
+    if (!bossActive) {
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const enemy = enemies[i];
+        enemy.y += enemySpeed;
+        enemy.x += Math.floor(Math.random() * 5) - 2; // -2..2
+
+        const playerHit = rectsCollide(playerX, playerY, playerW, playerH, enemy.x, enemy.y, enemyW, enemyH);
+
+        if (playerHit) {
+          enemies.splice(i, 1);
+          spawnEnemy();
+          playerLives -= 1;
+          continue;
+        }
+
+        if (enemy.y > HEIGHT) {
+          enemies.splice(i, 1);
+          spawnEnemy();
+          playerLives -= 1;
+          continue;
+        }
+      }
+    }
+
+    // Bullet vs enemy collision
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const enemy = enemies[i];
+      for (let j = bullets.length - 1; j >= 0; j--) {
+        const bullet = bullets[j];
+        if (rectsCollide(enemy.x, enemy.y, enemyW, enemyH, bullet.x, bullet.y, bulletW, bulletH)) {
+          enemy.health -= 1;
+          bullets.splice(j, 1);
+          if (enemy.health <= 0) {
+            enemies.splice(i, 1);
+            spawnEnemy();
+            score += 2;
+            saveHighScore();
+          }
+          break;
+        }
+      }
+    }
+
+    // Boss spawn
+    if (score >= 300 && !bossActive && !bossDefeated) {
+      bossActive = true;
+      enemies = [];
+    }
+
+    // Boss logic
+    if (bossActive) {
+      if (bossY < 50) bossY += bossSpeed;
+
+      if (now - lastBossShot > 700) {
+        bossBullets.push({
+          x: bossX + bossSize / 2,
+          y: bossY + bossSize - 40
+        });
+        lastBossShot = now;
+      }
+
+      for (let i = bossBullets.length - 1; i >= 0; i--) {
+        const b = bossBullets[i];
+        b.y += bossBulletSpeed;
+        if (b.y > HEIGHT) {
+          bossBullets.splice(i, 1);
+          continue;
+        }
+        if (rectsCollide(b.x, b.y, 20, 40, playerX, playerY, playerW, playerH)) {
+          playerLives -= 1;
+          bossBullets.splice(i, 1);
+        }
+      }
+
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const bullet = bullets[i];
+        if (rectsCollide(bullet.x, bullet.y, bulletW, bulletH, bossX, bossY, bossSize, bossSize)) {
+          bossHealth -= 1;
+          bullets.splice(i, 1);
+
+          if (bossHealth <= 0) {
+            score += 500;
+            saveHighScore();
+            bossActive = false;
+            bossDefeated = true;
+            bossHealth = 100;
+            bossY = -bossSize;
+            bossBullets = [];
+            for (let k = 0; k < 4; k++) spawnEnemy();
+          }
+          break;
+        }
+      }
+    }
+
+    if (playerLives <= 0 && !gameOver) {
+      gameOver = true;
+      saveHighScore();
+    }
+  }
+
+  function draw() {
+    // Background
+    if (images.background.complete && images.background.naturalWidth) {
+      ctx.drawImage(images.background, 0, 0, WIDTH, HEIGHT);
+    } else {
+      ctx.fillStyle = "#05060f";
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    }
+
+    // Player
+    ctx.drawImage(images.player, playerX, playerY, playerW, playerH);
+
+    // Bullets
+    ctx.fillStyle = YELLOW;
+    bullets.forEach((b) => ctx.fillRect(b.x, b.y, bulletW, bulletH));
+
+    // Enemies
+    if (!bossActive) {
+      enemies.forEach((enemy) => {
+        ctx.drawImage(images.enemy, enemy.x, enemy.y, enemyW, enemyH);
+        ctx.fillStyle = RED;
+        ctx.fillRect(enemy.x, enemy.y - 15, enemyW, 10);
+        ctx.fillStyle = GREEN;
+        ctx.fillRect(enemy.x, enemy.y - 15, (enemy.health / 3) * enemyW, 10);
+      });
+    }
+
+    // Boss
+    if (bossActive) {
+      ctx.drawImage(images.boss, bossX, bossY, bossSize, bossSize);
+
+      ctx.fillStyle = RED;
+      ctx.fillRect(WIDTH / 4, 30, WIDTH / 2, 30);
+      ctx.fillStyle = GREEN;
+      ctx.fillRect(WIDTH / 4, 30, (bossHealth / 100) * (WIDTH / 2), 30);
+
+      ctx.fillStyle = RED;
+      bossBullets.forEach((b) => ctx.fillRect(b.x, b.y, 20, 40));
+    }
+
+    // UI
+    drawText("Score: " + score, fontSize, WHITE, 20, 20);
+    drawText("High Score: " + highScore, fontSize, YELLOW, 20, 20 + fontSize * 1.4);
+    drawText("Lives: " + playerLives, fontSize, GREEN, 20, 20 + fontSize * 2.8);
+
+    // Player health bar
+    const hbY = 20 + fontSize * 4.2;
+    ctx.fillStyle = RED;
+    ctx.fillRect(20, hbY, 300, 30);
+    ctx.fillStyle = GREEN;
+    ctx.fillRect(20, hbY, Math.max(0, (playerLives / maxHealth)) * 300, 30);
+
+    // Game over overlay
+    if (gameOver) {
+      ctx.fillStyle = "rgba(0,0,0,0.7)";
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+      ctx.textAlign = "center";
+      drawText("GAME OVER", bigFontSize, RED, WIDTH / 2, HEIGHT / 2 - 150);
+      drawText("Tap Retry", fontSize, WHITE, WIDTH / 2, HEIGHT / 2);
+      ctx.textAlign = "left";
+
+      ctx.fillStyle = RED;
+      ctx.fillRect(retryButton.x, retryButton.y, retryButton.w, retryButton.h);
+      ctx.textAlign = "center";
+      drawText("RETRY", fontSize, WHITE, retryButton.x + retryButton.w / 2, retryButton.y + retryButton.h / 2 - fontSize / 2);
+      ctx.textAlign = "left";
+    }
+  }
+
+  function loop(now) {
+    update(now);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // ---------------------------------
+  // Boot
+  // ---------------------------------
+  resizeCanvas();
+  computeSizes();
+
+  loadImages(() => {
+    initGame();
+    requestAnimationFrame(loop);
+  });
+
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+})();
+</script>
+</body>
+</html>
